@@ -1,0 +1,1143 @@
+diff -uNrb arduino.orig/hardware/teensy/avr/boards.txt arduino/hardware/teensy/avr/boards.txt
+--- arduino.orig/hardware/teensy/avr/boards.txt	2020-06-04 11:32:54.223515400 +0100
++++ arduino/hardware/teensy/avr/boards.txt	2020-06-04 11:31:42.284331200 +0100
+@@ -696,6 +696,8 @@
+ teensy35.menu.usb.everything.build.usbtype=USB_EVERYTHING
+ teensy35.menu.usb.disable=No USB
+ teensy35.menu.usb.disable.build.usbtype=USB_DISABLED
++teensy35.menu.usb.blaster=Blaster
++teensy35.menu.usb.blaster.build.usbtype=USB_BLASTER
+ 
+ teensy35.menu.speed.120=120 MHz
+ teensy35.menu.speed.96=96 MHz
+diff -uNrb arduino.orig/hardware/teensy/avr/cores/teensy3/usb_desc.c arduino/hardware/teensy/avr/cores/teensy3/usb_desc.c
+--- arduino.orig/hardware/teensy/avr/cores/teensy3/usb_desc.c	2020-06-04 11:23:22.387199400 +0100
++++ arduino/hardware/teensy/avr/cores/teensy3/usb_desc.c	2020-06-17 10:50:59.081462700 +0100
+@@ -591,7 +591,14 @@
+ #define MULTITOUCH_INTERFACE_DESC_SIZE	0
+ #endif
+ 
+-#define CONFIG_DESC_SIZE		MULTITOUCH_INTERFACE_DESC_POS+MULTITOUCH_INTERFACE_DESC_SIZE
++#define USB_BLASTER_INTERFACE_DESC_POS  MULTITOUCH_INTERFACE_DESC_POS+MULTITOUCH_INTERFACE_DESC_SIZE
++#ifdef USB_BLASTER
++#define USB_BLASTER_INTERFACE_DESC_SIZE 9+7+7
++#else
++#define USB_BLASTER_INTERFACE_DESC_SIZE 0
++#endif
++
++#define CONFIG_DESC_SIZE                USB_BLASTER_INTERFACE_DESC_POS+USB_BLASTER_INTERFACE_DESC_SIZE
+ 
+ 
+ 
+@@ -610,8 +617,16 @@
+         NUM_INTERFACE,                          // bNumInterfaces
+         1,                                      // bConfigurationValue
+         0,                                      // iConfiguration
++#ifdef BM_ATTRIBUTES
++        BM_ATTRIBUTES,
++#else
+         0xC0,                                   // bmAttributes
++#endif
++#ifdef  MAX_POWER
++        MAX_POWER,
++#else
+         50,                                     // bMaxPower
++#endif
+ 
+ #ifdef CDC_IAD_DESCRIPTOR
+         // interface association descriptor, USB ECN, Table 9-Z
+@@ -1570,6 +1585,33 @@
+         MULTITOUCH_SIZE, 0,                     // wMaxPacketSize
+         1,                                      // bInterval
+ #endif // KEYMEDIA_INTERFACE
++
++#ifdef USB_BLASTER_INTERFACE
++        // interface descriptor, USB spec 9.6.5, page 267-269, Table 9-12
++        9,                                      // bLength
++        4,                                      // bDescriptorType
++        USB_BLASTER_INTERFACE,                  // bInterfaceNumber
++        0,                                      // bAlternateSetting
++        NUM_ENDPOINTS,                          // bNumEndpoints
++        0xFF,                                   // bInterfaceClass
++        0xFF,                                   // bInterfaceSubClass
++        0xFF,                                   // bInterfaceProtocol
++        0,                                      // iInterface
++        // endpoint descriptor, USB spec 9.6.6, page 269-271, Table 9-13
++        7,                                      // bLength
++        5,                                      // bDescriptorType
++        0x81,                                   // bEndpointAddress
++        0x02,                                   // bmAttributes (0x02 = bulk)
++        BLASTER_TX_SIZE, 0,                     // wMaxPacketSize
++        1,                                      // bInterval
++        // endpoint descriptor, USB spec 9.6.6, page 269-271, Table 9-13
++        7,                                      // bLength
++        5,                                      // bDescriptorType
++        0x02,                                   // bEndpointAddress
++        0x02,                                   // bmAttributes (0x02 = bulk)
++        BLASTER_RX_SIZE, 0,                     // wMaxPacketSize
++        1,                                      // bInterval
++#endif  // USB_BLASTER_INTERFACE
+ };
+ 
+ 
+@@ -1612,11 +1654,19 @@
+         3,
+         PRODUCT_NAME
+ };
++#ifdef PRODUCT_SERIAL
++struct usb_string_descriptor_struct usb_string_serial_number_default = {
++        2 + PRODUCT_SERIAL_LEN * 2,
++        3,
++        PRODUCT_SERIAL
++};
++#else
+ struct usb_string_descriptor_struct usb_string_serial_number_default = {
+         12,
+         3,
+         {0,0,0,0,0,0,0,0,0,0}
+ };
++#endif
+ #ifdef MTP_INTERFACE
+ struct usb_string_descriptor_struct usb_string_mtp = {
+ 	2 + 3 * 2,
+@@ -1627,6 +1677,7 @@
+ 
+ void usb_init_serialnumber(void)
+ {
++#ifndef PRODUCT_SERIAL
+ 	char buf[11];
+ 	uint32_t i, num;
+ 
+@@ -1657,6 +1708,7 @@
+ 		usb_string_serial_number_default.wString[i] = c;
+ 	}
+ 	usb_string_serial_number_default.bLength = i * 2 + 2;
++#endif  // PRODUCT_SERIAL
+ }
+ 
+ 
+diff -uNrb arduino.orig/hardware/teensy/avr/cores/teensy3/usb_desc.h arduino/hardware/teensy/avr/cores/teensy3/usb_desc.h
+--- arduino.orig/hardware/teensy/avr/cores/teensy3/usb_desc.h	2020-06-04 11:23:22.405959100 +0100
++++ arduino/hardware/teensy/avr/cores/teensy3/usb_desc.h	2020-06-17 10:50:59.092658600 +0100
+@@ -947,6 +947,32 @@
+   #define ENDPOINT14_CONFIG	ENDPOINT_TRANSMIT_ISOCHRONOUS
+   #define ENDPOINT15_CONFIG	ENDPOINT_TRANSMIT_ONLY
+ 
++#elif defined(USB_BLASTER)
++  #define VENDOR_ID             0x09fb      // Altera
++  #define PRODUCT_ID            0x6001      // Blaster
++  #define DEVICE_CLASS          0           // Defined at Interface level
++  #define BCD_DEVICE            0x0400      // 4.00
++  #define MANUFACTURER_NAME     { 'A', 'l', 't', 'e', 'r', 'a'}
++  #define MANUFACTURER_NAME_LEN 6
++  #define PRODUCT_NAME          {'U', 'S', 'B', '-', 'B', 'l', 'a', 's', 't', 'e', 'r'}
++  #define PRODUCT_NAME_LEN      11
++  #define PRODUCT_SERIAL        {'0', '0', '0', '0', '0', '0', '0', '0'}
++  #define PRODUCT_SERIAL_LEN    8
++  #define EP0_SIZE              8
++  #define NUM_ENDPOINTS         2
++  #define NUM_USB_BUFFERS       24
++  #define USB_POOL              {4, 20}  // Buffers per endpoint. Must sum to no more than NUM_USB_BUFFERS
++  #define NUM_INTERFACE         1
++  #define USB_BLASTER_INTERFACE 0
++  #define BM_ATTRIBUTES         0x80
++  #define MAX_POWER             40
++  #define BLASTER_RX_SIZE       64
++  #define BLASTER_TX_SIZE       64
++  #define BLASTER_TX_EP         1
++  #define BLASTER_RX_EP         2
++  #define ENDPOINT1_CONFIG      ENDPOINT_TRANSMIT_ONLY
++  #define ENDPOINT2_CONFIG      ENDPOINT_RECEIVE_ONLY
++
+ #endif
+ 
+ #ifdef USB_DESC_LIST_DEFINE
+diff -uNrb arduino.orig/hardware/teensy/avr/cores/teensy3/usb_dev.c arduino/hardware/teensy/avr/cores/teensy3/usb_dev.c
+--- arduino.orig/hardware/teensy/avr/cores/teensy3/usb_dev.c	2020-06-04 11:23:22.419648500 +0100
++++ arduino/hardware/teensy/avr/cores/teensy3/usb_dev.c	2020-06-17 10:51:07.913343100 +0100
+@@ -53,13 +53,19 @@
+ #pragma GCC optimize ("O3")
+ #endif
+ 
+-// buffer descriptor table
++// buffer descriptor table - Required by hardware, see 46.3.4 in Teensy 3.5 hardware manual
+ 
+ typedef struct {
+ 	uint32_t desc;
+ 	void * addr;
+ } bdt_t;
+ 
++// Four buffer descriptors per endpoint:
++// 0. Even receive buffer
++// 1. Odd receive buffer
++// 2. Even transmit buffer
++// 3. Odd transmit buffer
++
+ __attribute__ ((section(".usbdescriptortable"), used))
+ static bdt_t table[(NUM_ENDPOINTS+1)*4];
+ 
+@@ -77,13 +83,18 @@
+ #define TX_STATE_NONE_FREE_EVEN_FIRST	4
+ #define TX_STATE_NONE_FREE_ODD_FIRST	5
+ 
+-#define BDT_OWN		0x80
+-#define BDT_DATA1	0x40
+-#define BDT_DATA0	0x00
+-#define BDT_DTS		0x08
+-#define BDT_STALL	0x04
+-#define BDT_PID(n)	(((n) >> 2) & 15)
+-
++#define BDT_OWN         0x80    // Set to enable hardware to access buffer descriptor
++#define BDT_DATA1       0x40    // DATA1 field - Set this for odd buffer descriptors
++#define BDT_DATA0       0x00    // DATA0 field - Set this for even buffer descriptors
++#define BDT_DTS         0x08    // Enable Data Toggle Synchronization
++#define BDT_STALL       0x04    // Stall if using this buffer descriptor
++#define BDT_PID(n)      (((n) >> 2) & 15)   // Token PID: 0x1 = OUT, 0x9 = IN, 0xD = Setup
++
++// Sets the buffer descriptor:
++//    Sets the data length
++//    Sets the DATA0 / DATA1 bit - In practice use bit 2 of BD address to set this.
++//    Enables Data Toggle Synchronization
++//    Hands ownership of the buffer to the USB hardware
+ #define BDT_DESC(count, data)	(BDT_OWN | BDT_DTS \
+ 				| ((data) ? BDT_DATA1 : BDT_DATA0) \
+ 				| ((count) << 16))
+@@ -94,7 +105,10 @@
+ #define EVEN 0
+ #define DATA0 0
+ #define DATA1 1
++// Index into the BD table as a function of endpoint, tx/rx, and odd/even.
+ #define index(endpoint, tx, odd) (((endpoint) << 2) | ((tx) << 1) | (odd))
++
++// Get BD address from contents of USB0_STAT register - 46.4.13 in hardware manual
+ #define stat2bufferdescriptor(stat) (table + ((stat) >> 2))
+ 
+ 
+@@ -140,11 +154,46 @@
+ static uint16_t ep0_tx_len;
+ static uint8_t ep0_tx_bdt_bank = 0;
+ static uint8_t ep0_tx_data_toggle = 0;
++#ifdef USB_POOL
++uint8_t usb_rx_memory_needed[NUM_ENDPOINTS];
++#else
+ uint8_t usb_rx_memory_needed = 0;
++#endif
+ 
+ volatile uint8_t usb_configuration = 0;
+ volatile uint8_t usb_reboot_timer = 0;
+ 
++#if MEM_DEBUG > 0
++void usb_queues(void)
++    {
++    const usb_packet_t *pbase = usb_mem_base();
++    for (int iEP = 0; iEP < NUM_ENDPOINTS; ++iEP)
++        {
++        UsbLog("EP %d TX Queue:", iEP+1);
++        usb_packet_t *p = tx_first[iEP];
++        while (p != NULL)
++            {
++            UsbLog(" %d (%d)", p - pbase, p->len);
++            p = p->next;
++            }
++        UsbLog("\r\n");
++        UsbLog("EP %d RX Queue:", iEP+1);
++        p = rx_first[iEP];
++        while (p != NULL)
++            {
++            UsbLog(" %d (%d)", p - pbase, p->len);
++            p = p->next;
++            }
++        UsbLog("\r\n");
++        }
++    for (int i = 0; i <= NUM_ENDPOINTS; ++i)
++        {
++        for (int j = 0; j < 4; ++j)
++            UsbLog (" 0x%08X:%p", table[4*i+j].desc, table[4*i+j].addr);
++        UsbLog ("\r\n");
++        }
++    }
++#endif
+ 
+ static void endpoint0_stall(void)
+ {
+@@ -180,7 +229,7 @@
+ 	uint8_t epconf;
+ 	const uint8_t *cfg;
+ 	int i;
+-
++        // UsbLog ("Setup: 0x%04X\r\n", setup.wRequestAndType);
+ 	switch (setup.wRequestAndType) {
+ 	  case 0x0500: // SET_ADDRESS
+ 		break;
+@@ -192,7 +241,13 @@
+ 		// clear all BDT entries, free any allocated memory...
+ 		for (i=4; i < (NUM_ENDPOINTS+1)*4; i++) {
+ 			if (table[i].desc & BDT_OWN) {
+-				usb_free((usb_packet_t *)((uint8_t *)(table[i].addr) - 8));
++                                usb_packet_t *p = (usb_packet_t *)((uint8_t *)(table[i].addr)
++                                    - offsetof(usb_packet_t, buf));
++#if MEM_DEBUG > 0
++                                usb_free(p, i);
++#else
++                                usb_free(p);
++#endif
+ 			}
+ 		}
+ 		// free all queued packets
+@@ -201,7 +256,11 @@
+ 			p = rx_first[i];
+ 			while (p) {
+ 				n = p->next;
++#if MEM_DEBUG > 0
++                                usb_free(p, __LINE__);
++#else
+ 				usb_free(p);
++#endif
+ 				p = n;
+ 			}
+ 			rx_first[i] = NULL;
+@@ -209,7 +268,11 @@
+ 			p = tx_first[i];
+ 			while (p) {
+ 				n = p->next;
++#if MEM_DEBUG > 0
++                                usb_free(p, __LINE__);
++#else
+ 				usb_free(p);
++#endif
+ 				p = n;
+ 			}
+ 			tx_first[i] = NULL;
+@@ -228,8 +291,13 @@
+ 				break;
+ 			}
+ 		}
++#ifndef USB_POOL
+ 		usb_rx_memory_needed = 0;
++#endif
+ 		for (i=1; i <= NUM_ENDPOINTS; i++) {
++#ifdef USB_POOL
++                        usb_rx_memory_needed[i-1] = 0;
++#endif
+ 			epconf = *cfg++;
+ 			*reg = epconf;
+ 			reg += 4;
+@@ -243,24 +311,54 @@
+ #endif
+ 			if (epconf & USB_ENDPT_EPRXEN) {
+ 				usb_packet_t *p;
++#ifdef USB_POOL
++#if MEM_DEBUG > 0
++                                p = usb_malloc(i, __LINE__);
++#else
++                                p = usb_malloc(i);
++#endif
++#else
+ 				p = usb_malloc();
++#endif
+ 				if (p) {
+ 					table[index(i, RX, EVEN)].addr = p->buf;
+ 					table[index(i, RX, EVEN)].desc = BDT_DESC(64, 0);
+ 				} else {
++                                        table[index(i, RX, EVEN)].addr = 0;
+ 					table[index(i, RX, EVEN)].desc = 0;
+-					usb_rx_memory_needed++;
++#ifdef USB_POOL
++                                        ++usb_rx_memory_needed[i-1];
++                                        // UsbLog("Request %d\r\n", i-1);
++#else
++                                        ++usb_rx_memory_needed;
++#endif
+ 				}
++#ifdef USB_POOL
++#if MEM_DEBUG > 0
++                                p = usb_malloc(i, __LINE__);
++#else
++                                p = usb_malloc(i);
++#endif
++#else
+ 				p = usb_malloc();
++#endif
+ 				if (p) {
+ 					table[index(i, RX, ODD)].addr = p->buf;
+ 					table[index(i, RX, ODD)].desc = BDT_DESC(64, 1);
+ 				} else {
++                                        table[index(i, RX, ODD)].addr = 0;
+ 					table[index(i, RX, ODD)].desc = 0;
+-					usb_rx_memory_needed++;
++#ifdef USB_POOL
++                                        ++usb_rx_memory_needed[i-1];
++                                        // UsbLog("Request %d\r\n", i-1);
++#else
++                                        ++usb_rx_memory_needed;
++#endif
+ 				}
+ 			}
++                        table[index(i, TX, EVEN)].addr = 0;
+ 			table[index(i, TX, EVEN)].desc = 0;
++                        table[index(i, TX, ODD)].addr = 0;
+ 			table[index(i, TX, ODD)].desc = 0;
+ #ifdef AUDIO_INTERFACE
+ 			if (i == AUDIO_SYNC_ENDPOINT) {
+@@ -497,7 +595,36 @@
+ 		}
+ 		break;
+ #endif
++#if defined(USB_BLASTER)
++            case 0x90C0:
++                reply_buffer[0] = blaster_eeprom (2 * setup.wIndex);
++                reply_buffer[1] = blaster_eeprom (2 * setup.wIndex + 1);
++                datalen = 2;
++                data = reply_buffer;
++                break;
++#endif
+ 	  default:
++#if defined(USB_BLASTER)
++              if ( setup.wRequestAndType & 0x40 )
++                  {
++                  // Vendor request
++                  if ( setup.wRequestAndType & 0x80 )
++                      {
++                      // Input request
++                      reply_buffer[0] = 0x36;
++                      reply_buffer[1] = 0x83;
++                      datalen = 2;
++                      data = reply_buffer;
++                      }
++                  else
++                      {
++                      // Output request
++                      datalen = 0;
++                      data = reply_buffer;
++                      }
++                  break;
++                  }
++#endif
+ 		endpoint0_stall();
+ 		return;
+ 	}
+@@ -611,6 +738,7 @@
+ 		break;
+ 	case 0x01:  // OUT transaction received from host
+ 	case 0x02:
++            // UsbLog ("EP0 OUT 0x%04X\r\n", setup.wRequestAndType);
+ 		//serial_print("PID=OUT\n");
+ 		if (setup.wRequestAndType == 0x2021 /*CDC_SET_LINE_CODING*/) {
+ 			int i;
+@@ -692,10 +820,12 @@
+ 		}
+ 
+ 		break;
+-	//default:
++        default:
++            // UsbLog ("PID = 0x%02X\r\n", pid);
+ 		//serial_print("PID=unknown:");
+ 		//serial_phex(pid);
+ 		//serial_print("\n");
++            break;
+ 	}
+ 	USB0_CTL = USB_CTL_USBENSOFEN; // clear TXSUSPENDTOKENBUSY bit
+ }
+@@ -788,7 +918,13 @@
+ 	cfg = usb_endpoint_config_table;
+ 	//serial_print("rx_mem:");
+ 	__disable_irq();
++#ifdef USB_POOL
++        i = packet->iPool + 1;
++        cfg += i - 1;
++                {
++#else
+ 	for (i=1; i <= NUM_ENDPOINTS; i++) {
++#endif
+ #ifdef AUDIO_INTERFACE
+ 		if (i == AUDIO_RX_ENDPOINT) continue;
+ #endif
+@@ -796,7 +932,11 @@
+ 			if (table[index(i, RX, EVEN)].desc == 0) {
+ 				table[index(i, RX, EVEN)].addr = packet->buf;
+ 				table[index(i, RX, EVEN)].desc = BDT_DESC(64, 0);
+-				usb_rx_memory_needed--;
++#ifdef USB_POOL
++                                --usb_rx_memory_needed[i-1];
++#else
++                                --usb_rx_memory_needed;
++#endif
+ 				__enable_irq();
+ 				//serial_phex(i);
+ 				//serial_print(",even\n");
+@@ -805,7 +945,11 @@
+ 			if (table[index(i, RX, ODD)].desc == 0) {
+ 				table[index(i, RX, ODD)].addr = packet->buf;
+ 				table[index(i, RX, ODD)].desc = BDT_DESC(64, 1);
+-				usb_rx_memory_needed--;
++#ifdef USB_POOL
++                                --usb_rx_memory_needed[i-1];
++#else
++                                --usb_rx_memory_needed;
++#endif
+ 				__enable_irq();
+ 				//serial_phex(i);
+ 				//serial_print(",odd\n");
+@@ -817,8 +961,16 @@
+ 	// we should never reach this point.  If we get here, it means
+ 	// usb_rx_memory_needed was set greater than zero, but no memory
+ 	// was actually needed.
++#ifdef USB_POOL
++        usb_rx_memory_needed[i-1] = 0;
++#else
+ 	usb_rx_memory_needed = 0;
++#endif
++#if MEM_DEBUG > 0
++        usb_free(packet, __LINE__);
++#else
+ 	usb_free(packet);
++#endif
+ 	return;
+ }
+ 
+@@ -830,6 +982,8 @@
+ 	bdt_t *b = &table[index(endpoint, TX, EVEN)];
+ 	uint8_t next;
+ 
++        // if (packet->len == 0) UsbLog ("Zero length packet.\r\n");
++
+ 	endpoint--;
+ 	if (endpoint >= NUM_ENDPOINTS) return;
+ 	__disable_irq();
+@@ -909,10 +1063,10 @@
+ 	//serial_phex(status);
+ 	//serial_print("\n");
+ 	restart:
+-	status = USB0_ISTAT;
++        status = USB0_ISTAT;    // Interrupt status register - 46.4.9 in hardware manual
+ 
+-	if ((status & USB_ISTAT_SOFTOK /* 04 */ )) {
+-		if (usb_configuration) {
++        if ((status & USB_ISTAT_SOFTOK /* 04 */ )) {    // USB Start of Frame received
++                if (usb_configuration) {    // Non-zero if a configuration has been set
+ 			t = usb_reboot_timer;
+ 			if (t) {
+ 				usb_reboot_timer = --t;
+@@ -955,13 +1109,16 @@
+ #ifdef MULTITOUCH_INTERFACE
+ 			usb_touchscreen_update_callback();
+ #endif
++#ifdef USB_BLASTER
++                        blaster_flush ();
++#endif
+ 		}
+-		USB0_ISTAT = USB_ISTAT_SOFTOK;
++                USB0_ISTAT = USB_ISTAT_SOFTOK;  // Clear interrupt by writing back flag
+ 	}
+ 
+-	if ((status & USB_ISTAT_TOKDNE /* 08 */ )) {
++        if ((status & USB_ISTAT_TOKDNE /* 08 */ )) {    // Finished processing USB token
+ 		uint8_t endpoint;
+-		stat = USB0_STAT;
++                stat = USB0_STAT;   // Status register - 46.4.13 in hardware manual
+ 		//serial_print("token: ep=");
+ 		//serial_phex(stat >> 4);
+ 		//serial_print(stat & 0x08 ? ",tx" : ",rx");
+@@ -970,8 +1127,13 @@
+ 		if (endpoint == 0) {
+ 			usb_control(stat);
+ 		} else {
+-			bdt_t *b = stat2bufferdescriptor(stat);
+-			usb_packet_t *packet = (usb_packet_t *)((uint8_t *)(b->addr) - 8);
++                        bdt_t *b = stat2bufferdescriptor(stat);     // Get corresponding buffer descriptor
++                        // Obtain current usb_packet_t address from buffer descriptor:
++                        // Better option might have been to put buf[] at the top of the
++                        // usb_packet_t structure, so that the buf[] and the structure
++                        // have the same address.
++                        usb_packet_t *packet = (usb_packet_t *)((uint8_t *)(b->addr)
++                            - offsetof(usb_packet_t, buf));
+ #if 0
+ 			serial_print("ep:");
+ 			serial_phex(endpoint);
+@@ -1006,12 +1168,17 @@
+ 			} else
+ #endif
+ 			if (stat & 0x08) { // transmit
+-				usb_free(packet);
+-				packet = tx_first[endpoint];
+-				if (packet) {
++#if MEM_DEBUG > 0
++                                usb_free(packet, __LINE__);   // Free the just transmitted packet
++#else
++                                usb_free(packet);   // Free the just transmitted packet
++#endif
++                                packet = tx_first[endpoint];    // Get the next queued packet
++                                if (packet) {   // If another packet
+ 					//serial_print("tx packet\n");
+-					tx_first[endpoint] = packet->next;
+-					b->addr = packet->buf;
++                                        tx_first[endpoint] = packet->next;  // Remove it from the queue
++                                        b->addr = packet->buf;  // And link it to the buffer descriptor
++                                        // Update which BDs are in use
+ 					switch (tx_state[endpoint]) {
+ 					  case TX_STATE_BOTH_FREE_EVEN_FIRST:
+ 						tx_state[endpoint] = TX_STATE_ODD_FREE;
+@@ -1028,10 +1195,12 @@
+ 					  default:
+ 						break;
+ 					}
++                                        // Set the BD for transmission
+ 					b->desc = BDT_DESC(packet->len,
+ 						((uint32_t)b & 8) ? DATA1 : DATA0);
+ 				} else {
+ 					//serial_print("tx no packet\n");
++                                        // Update which BDs are in use
+ 					switch (tx_state[endpoint]) {
+ 					  case TX_STATE_BOTH_FREE_EVEN_FIRST:
+ 					  case TX_STATE_BOTH_FREE_ODD_FIRST:
+@@ -1047,10 +1216,13 @@
+ 						  TX_STATE_ODD_FREE : TX_STATE_EVEN_FREE;
+ 						break;
+ 					}
++                                // Does not update the BD. OWN flag remains clear.
++                                // Assume that this results in a NAK if a request to
++                                // transmit this BD.
+ 				}
+ 			} else { // receive
+-				packet->len = b->desc >> 16;
+-				if (packet->len > 0) {
++                                packet->len = b->desc >> 16;    // Get received length from BD
++                                if (packet->len > 0) {  // Data received - Add packet to received queue
+ 					packet->index = 0;
+ 					packet->next = NULL;
+ 					if (rx_first[endpoint] == NULL) {
+@@ -1074,57 +1246,73 @@
+ 					// packets, so a flood of incoming data on 1 endpoint
+ 					// doesn't starve the others if the user isn't reading
+ 					// it regularly
++#ifdef USB_POOL
++#if MEM_DEBUG > 0
++                                        packet = usb_malloc(endpoint + 1, __LINE__);
++#else
++                                        packet = usb_malloc(endpoint + 1);
++#endif
++#else
+ 					packet = usb_malloc();
+-					if (packet) {
++#endif
++                                        if (packet) {   // Link new packet to BD
++                                                // UsbLog ("Allocate %p\r\n", packet);
+ 						b->addr = packet->buf;
+ 						b->desc = BDT_DESC(64,
+ 							((uint32_t)b & 8) ? DATA1 : DATA0);
+ 					} else {
+ 						//serial_print("starving ");
+ 						//serial_phex(endpoint + 1);
+-						b->desc = 0;
+-						usb_rx_memory_needed++;
++                                                b->desc = 0;    // OWN flag not set. NAK / Stall if used?
++#ifdef USB_POOL
++                                                ++usb_rx_memory_needed[endpoint];
++                                                // UsbLog("Request %d\r\n", endpoint);
++#else
++                                                ++usb_rx_memory_needed;
++#endif
+ 					}
+-				} else {
++                                } else {    // No data - reuse the current packet
++                                        // UsbLog ("Empty 0x%04X\r\n", b->desc);
+ 					b->desc = BDT_DESC(64, ((uint32_t)b & 8) ? DATA1 : DATA0);
+ 				}
+ 			}
+ 
+ 		}
+-		USB0_ISTAT = USB_ISTAT_TOKDNE;
+-		goto restart;
++                USB0_ISTAT = USB_ISTAT_TOKDNE;  // Reset the interrupt
++                goto restart;   // There may be another interrupt
+ 	}
+ 
+ 
+ 
+ 	if (status & USB_ISTAT_USBRST /* 01 */ ) {
+ 		//serial_print("reset\n");
++                // UsbLog ("Reset\r\n");
+ 
+ 		// initialize BDT toggle bits
+-		USB0_CTL = USB_CTL_ODDRST;
++                USB0_CTL = USB_CTL_ODDRST;  // Hardware 46.4.14
+ 		ep0_tx_bdt_bank = 0;
+ 
+ 		// set up buffers to receive Setup and OUT packets
+ 		table[index(0, RX, EVEN)].desc = BDT_DESC(EP0_SIZE, 0);
+ 		table[index(0, RX, EVEN)].addr = ep0_rx0_buf;
+-		table[index(0, RX, ODD)].desc = BDT_DESC(EP0_SIZE, 0);
++                table[index(0, RX, ODD)].desc = BDT_DESC(EP0_SIZE, 0);  // Why is this DATA0?
+ 		table[index(0, RX, ODD)].addr = ep0_rx1_buf;
+ 		table[index(0, TX, EVEN)].desc = 0;
+ 		table[index(0, TX, ODD)].desc = 0;
+ 
+-		// activate endpoint 0
++                // activate endpoint 0 - Tx, Rx & Handshake - 46.4.23
+ 		USB0_ENDPT0 = USB_ENDPT_EPRXEN | USB_ENDPT_EPTXEN | USB_ENDPT_EPHSHK;
+ 
+-		// clear all ending interrupts
+-		USB0_ERRSTAT = 0xFF;
+-		USB0_ISTAT = 0xFF;
++                // clear all ending interrupts - Writing one bits clears interrupt
++                USB0_ERRSTAT = 0xFF;    // Hardware 46.4.11
++                USB0_ISTAT = 0xFF;      // Hardware 46.4.9
+ 
+ 		// set the address to zero during enumeration
+-		USB0_ADDR = 0;
++                USB0_ADDR = 0;          // Hardware 46.4.15
+ 
+ 		// enable other interrupts
+-		USB0_ERREN = 0xFF;
+-		USB0_INTEN = USB_INTEN_TOKDNEEN |
++                USB0_ERREN = 0xFF;                  // Hardware 46.4.12
++                USB0_INTEN = USB_INTEN_TOKDNEEN |   // Hardware 46.4.10
+ 			USB_INTEN_SOFTOKEN |
+ 			USB_INTEN_STALLEN |
+ 			USB_INTEN_ERROREN |
+@@ -1132,27 +1320,30 @@
+ 			USB_INTEN_SLEEPEN;
+ 
+ 		// is this necessary?
+-		USB0_CTL = USB_CTL_USBENSOFEN;
++                USB0_CTL = USB_CTL_USBENSOFEN;      // Hardware 46.4.14
+ 		return;
+ 	}
+ 
+ 
+-	if ((status & USB_ISTAT_STALL /* 80 */ )) {
++        if ((status & USB_ISTAT_STALL /* 80 */ )) { // Clear interrupt and reenable endpoint
+ 		//serial_print("stall:\n");
++                // UsbLog ("Stall\r\n");
+ 		USB0_ENDPT0 = USB_ENDPT_EPRXEN | USB_ENDPT_EPTXEN | USB_ENDPT_EPHSHK;
+ 		USB0_ISTAT = USB_ISTAT_STALL;
+ 	}
+-	if ((status & USB_ISTAT_ERROR /* 02 */ )) {
++        if ((status & USB_ISTAT_ERROR /* 02 */ )) { // Clear interrupr
+ 		uint8_t err = USB0_ERRSTAT;
+ 		USB0_ERRSTAT = err;
++                // UsbLog ("Error 0x%02X\r\n", err);
+ 		//serial_print("err:");
+ 		//serial_phex(err);
+ 		//serial_print("\n");
+ 		USB0_ISTAT = USB_ISTAT_ERROR;
+ 	}
+ 
+-	if ((status & USB_ISTAT_SLEEP /* 10 */ )) {
++        if ((status & USB_ISTAT_SLEEP /* 10 */ )) { // Clear interrupt
+ 		//serial_print("sleep\n");
++                // UsbLog ("Sleep\r\n");
+ 		USB0_ISTAT = USB_ISTAT_SLEEP;
+ 	}
+ 
+@@ -1169,7 +1360,13 @@
+ 
+ 	usb_init_serialnumber();
+ 
+-	for (i=0; i <= NUM_ENDPOINTS*4; i++) {
++#ifdef USB_POOL
++        if ( ! usb_mem_init () ) return;
++#endif
++
++        // This was for (i=0; i <= NUM_ENDPOINTS*4; i++)
++        // which left the last three entries undefined
++        for (i=0; i < (NUM_ENDPOINTS+1)*4; i++) {
+ 		table[i].desc = 0;
+ 		table[i].addr = 0;
+ 	}
+diff -uNrb arduino.orig/hardware/teensy/avr/cores/teensy3/usb_dev.h arduino/hardware/teensy/avr/cores/teensy3/usb_dev.h
+--- arduino.orig/hardware/teensy/avr/cores/teensy3/usb_dev.h	2020-06-04 11:23:22.425531600 +0100
++++ arduino/hardware/teensy/avr/cores/teensy3/usb_dev.h	2020-06-17 10:51:07.919638500 +0100
+@@ -122,6 +122,17 @@
+ #include "usb_serial3.h"
+ #endif
+ 
++#ifdef USB_BLASTER
++#ifdef __cplusplus
++extern "C" {
++#endif
++extern uint8_t blaster_eeprom (uint16_t index);
++extern void blaster_flush (void);
++#ifdef __cplusplus
++}
++#endif
++#endif
++
+ #else // F_CPU < 20000000
+ 
+ #ifdef __cplusplus
+diff -uNrb arduino.orig/hardware/teensy/avr/cores/teensy3/usb_mem.c arduino/hardware/teensy/avr/cores/teensy3/usb_mem.c
+--- arduino.orig/hardware/teensy/avr/cores/teensy3/usb_mem.c	2020-05-31 15:37:36.675364000 +0100
++++ arduino/hardware/teensy/avr/cores/teensy3/usb_mem.c	2020-06-17 10:51:16.481830800 +0100
+@@ -32,19 +32,256 @@
+ #if F_CPU >= 20000000 && defined(NUM_ENDPOINTS)
+ 
+ #include "kinetis.h"
+-//#include "HardwareSerial.h"
+ #include "usb_mem.h"
+ 
+ __attribute__ ((section(".usbbuffers"), used))
+ unsigned char usb_buffer_memory[NUM_USB_BUFFERS * sizeof(usb_packet_t)];
+ 
+-static uint32_t usb_buffer_available = 0xFFFFFFFF;
++//#if MEM_DEBUG > 0
++#include "HardwareSerial.h"
++#include <stdarg.h>
++#include <string.h>
++#include <stdio.h>
++
++void UsbLog (const char *psFmt,...)
++    {
++    char sLine[256];
++    va_list va;
++    va_start (va, psFmt);
++    vsprintf (sLine, psFmt, va);
++    va_end (va);
++    serial2_write (sLine, strlen (sLine));
++    }
++
++#if MEM_DEBUG > 0
++#define NEVT    20
++static struct
++    {
++    char            type;
++    usb_packet_t    *p;
++    int             iPool;
++    int             iLine;
++    }
++    usb_evt[NEVT];
++static int nEvt = 0;
++
++#if MEM_DEBUG > 1
++static int bNull[NUM_ENDPOINTS];
++#endif
++
++const usb_packet_t * usb_mem_base(void)
++    {
++    return (usb_packet_t *) usb_buffer_memory;
++    }
++#endif  // MEM_DEBUG > 0
++
++#ifdef USB_POOL
++static int pool_size[] = USB_POOL;
++static usb_packet_t *pool_ptr[NUM_ENDPOINTS];
++
++int usb_mem_init(void)
++    {
++    int nBuf = NUM_USB_BUFFERS;
++    usb_packet_t *ppkt = (usb_packet_t *) usb_buffer_memory;
++    if (sizeof (pool_size) / sizeof (int) < NUM_ENDPOINTS)
++        {
++#if MEM_DEBUG > 0
++        UsbLog ("Insufficient pools defined\r\n");
++#endif
++        return 0;
++        }
++    for (int iPool = 0; iPool < NUM_ENDPOINTS; ++iPool)
++        {
++#if MEM_DEBUG > 1
++        UsbLog ("Buffer pool %d\r\n", iPool+1);
++#endif
++        pool_ptr[iPool] = NULL;
++        for (int i = 0; i < pool_size[iPool]; ++i)
++            {
++            if (nBuf == 0)
++                {
++#if MEM_DEBUG > 0
++                UsbLog ("Insufficient USB buffers.\r\n");
++#endif
++                return 0;
++                }
++            ppkt->next = pool_ptr[iPool];
++            ppkt->iPool = iPool;
++            pool_ptr[iPool] = ppkt;
++#if MEM_DEBUG > 1
++            UsbLog ("ppkt = %p, next = %p\r\n", ppkt, ppkt->next);
++#endif
++            ++ppkt;
++            --nBuf;
++            }
++#if MEM_DEBUG > 1
++        UsbLog ("pool_ptr[%d] = %p\r\n", iPool, pool_ptr[iPool]);
++#endif
++        }
++#if MEM_DEBUG > 1
++    UsbLog ("USB buffer pools created.\r\n");
++#endif
++    return 1;
++    }
++
++#if MEM_DEBUG > 0
++void usb_mem_show(void)
++    {
++    for (int i = 0; i < nEvt; ++i) UsbLog ("%c EP%d packet = %p (%d) line %d\r\n",
++        usb_evt[i].type, usb_evt[i].iPool+1, usb_evt[i].p,
++        usb_evt[i].p - (usb_packet_t *)usb_buffer_memory, usb_evt[i].iLine);
++    for (int iPool = 0; iPool < NUM_ENDPOINTS; ++iPool)
++        {
++        UsbLog("Pool %d:", iPool+1);
++        usb_packet_t *p =pool_ptr[iPool];
++        while (p != NULL)
++            {
++            UsbLog(" %d", p - (usb_packet_t *)usb_buffer_memory);
++            p = p->next;
++            }
++        UsbLog("\r\n");
++        }
++    usb_queues();
++    nEvt = 0;
++    }
++#endif  // MEM_DEBUG > 0
++
++#if MEM_DEBUG > 0
++usb_packet_t * usb_malloc(int iEP, int iLine)
++#else
++usb_packet_t * usb_malloc(int iEP)
++#endif
++    {
++    int iPool = iEP - 1;
++    if ((iEP <= 0) || (iEP > NUM_ENDPOINTS))
++        {
++#if MEM_DEBUG > 0
++        if ( nEvt < NEVT )
++            {
++            usb_evt[nEvt].type = 'D';
++            usb_evt[nEvt].p = NULL;
++            usb_evt[nEvt].iPool = iPool;
++            usb_evt[nEvt].iLine = iLine;
++            ++nEvt;
++            }
++#endif
++        return NULL;
++        }
++	__disable_irq();
++    usb_packet_t *ppkt = pool_ptr[iPool];
++    if ( ppkt != NULL )
++        {
++        pool_ptr[iPool] = ppkt->next;
++        ppkt->len = 0;
++        ppkt->index = 0;
++        ppkt->next = NULL;
++        }
++#if MEM_DEBUG > 0
++    if ( nEvt < NEVT )
++        {
++        usb_evt[nEvt].type = 'A';
++        usb_evt[nEvt].p = ppkt;
++        usb_evt[nEvt].iPool = iPool;
++        usb_evt[nEvt].iLine = iLine;
++        ++nEvt;
++        }
++#endif
++	__enable_irq();
++#if MEM_DEBUG > 1
++    if ((ppkt != NULL) || (bNull[iEP]))
++        {
++        UsbLog ("usb_malloc (%d) = %p, pool_ptr[%d] = %p\r\n", iEP, ppkt, iPool, pool_ptr[iPool]);
++        bNull[iEP] = ppkt != NULL;
++        }
++#endif
++    return ppkt;
++    }
++
++// for the receive endpoints to request memory
++extern uint8_t usb_rx_memory_needed[NUM_ENDPOINTS];
++extern void usb_rx_memory(usb_packet_t *packet);
++
++#if MEM_DEBUG > 0
++void usb_free(usb_packet_t *ppkt, int iLine)
++#else
++void usb_free(usb_packet_t *ppkt)
++#endif
++    {
++    int iPool = ppkt->iPool;
++    if ((iPool < 0) || (iPool >= NUM_ENDPOINTS))
++        {
++#if MEM_DEBUG > 0
++        if ( nEvt < NEVT )
++            {
++            usb_evt[nEvt].type = 'C';
++            usb_evt[nEvt].p = ppkt;
++            usb_evt[nEvt].iPool = iPool;
++            usb_evt[nEvt].iLine = iLine;
++            ++nEvt;
++            }
++#endif
++        return;
++        }
++    // UsbLog ("Mem needed: %d %d\r\n", usb_rx_memory_needed[0], usb_rx_memory_needed[1]);
++	// if the endpoint is starving for memory to receive
++	// packets, give this memory to them immediately!
++    // Essential, as endpoint does not retry memory allocation if initially failed.
++	if (usb_rx_memory_needed[iPool] && usb_configuration) {
++        // UsbLog ("Assign packet\r\n");
++		usb_rx_memory(ppkt);
++		return;
++	}
++    
++	__disable_irq();
++	unsigned int n = ((uint8_t *)ppkt - usb_buffer_memory) / sizeof(usb_packet_t);
++	if (n >= NUM_USB_BUFFERS)
++        {
++#if MEM_DEBUG > 0
++        if ( nEvt < NEVT )
++            {
++            usb_evt[nEvt].type = 'B';
++            usb_evt[nEvt].p = ppkt;
++            usb_evt[nEvt].iPool = 0;
++            usb_evt[nEvt].iLine = iLine;
++            ++nEvt;
++            }
++#endif
++        return;
++        }
++#if MEM_DEBUG > 0
++    if ( nEvt < NEVT )
++        {
++        usb_evt[nEvt].type = 'F';
++        usb_evt[nEvt].p = ppkt;
++        usb_evt[nEvt].iPool = ppkt->iPool;
++        usb_evt[nEvt].iLine = iLine;
++        ++nEvt;
++        }
++#endif
++    ppkt->next = pool_ptr[iPool];
++    pool_ptr[iPool] = ppkt;
++	__enable_irq();
++#if MEM_DEBUG > 1
++    UsbLog ("usb_free (%p), iPool = %d, next = %p\r\n", ppkt, iPool, ppkt->next);
++#endif
++    }
++#else   // USB_POOL not defined
+ 
+ // use bitmask and CLZ instruction to implement fast free list
+ // http://www.archivum.info/gnu.gcc.help/2006-08/00148/Re-GCC-Inline-Assembly.html
+ // http://gcc.gnu.org/ml/gcc/2012-06/msg00015.html
+ // __builtin_clz()
+ 
++static uint32_t usb_buffer_available = 0xFFFFFFFF;
++
++#if MEM_DEBUG > 0
++void usb_mem_show(void)
++    {
++    UsbLog("usb_buffer_available = 0x%08X\r\n", usb_buffer_available);
++    usb_queues();
++    }
++#endif
++
+ usb_packet_t * usb_malloc(void)
+ {
+ 	unsigned int n, avail;
+@@ -59,14 +296,14 @@
+ 	}
+ 	//serial_print("malloc:");
+ 	//serial_phex(n);
+-	//serial_print("\n");
++	//serial_print("\r\n");
+ 
+ 	usb_buffer_available = avail & ~(0x80000000 >> n);
+ 	__enable_irq();
+ 	p = usb_buffer_memory + (n * sizeof(usb_packet_t));
+ 	//serial_print("malloc:");
+ 	//serial_phex32((int)p);
+-	//serial_print("\n");
++	//serial_print("\r\n");
+ 	*(uint32_t *)p = 0;
+ 	*(uint32_t *)(p + 4) = 0;
+ 	return (usb_packet_t *)p;
+@@ -84,14 +321,15 @@
+ 	n = ((uint8_t *)p - usb_buffer_memory) / sizeof(usb_packet_t);
+ 	if (n >= NUM_USB_BUFFERS) return;
+ 	//serial_phex(n);
+-	//serial_print("\n");
++	//serial_print("\r\n");
+ 
+ 	// if any endpoints are starving for memory to receive
+ 	// packets, give this memory to them immediately!
++    // Essential, as endpoint does not retry memory allocation if initially failed.
+ 	if (usb_rx_memory_needed && usb_configuration) {
+ 		//serial_print("give to rx:");
+ 		//serial_phex32((int)p);
+-		//serial_print("\n");
++		//serial_print("\r\n");
+ 		usb_rx_memory(p);
+ 		return;
+ 	}
+@@ -103,7 +341,8 @@
+ 
+ 	//serial_print("free:");
+ 	//serial_phex32((int)p);
+-	//serial_print("\n");
++	//serial_print("\r\n");
+ }
++#endif  // defined USB_POOL
+ 
+ #endif // F_CPU >= 20 MHz && defined(NUM_ENDPOINTS)
+diff -uNrb arduino.orig/hardware/teensy/avr/cores/teensy3/usb_mem.h arduino/hardware/teensy/avr/cores/teensy3/usb_mem.h
+--- arduino.orig/hardware/teensy/avr/cores/teensy3/usb_mem.h	2020-05-31 15:37:36.675364000 +0100
++++ arduino/hardware/teensy/avr/cores/teensy3/usb_mem.h	2020-06-17 10:51:16.484624100 +0100
+@@ -31,21 +31,51 @@
+ #ifndef _usb_mem_h_
+ #define _usb_mem_h_
+ 
++//  Debug levels:
++//      0 = No debugging
++//      1 = Collect information
++//      2 = Messages during interrupt routines
++#define MEM_DEBUG   0
++
+ #include <stdint.h>
++#include "usb_desc.h"
+ 
++// It seems that buf must be 32 bit aligned. Therefore this structure
++// must be a multiple of 32 bits long.
+ typedef struct usb_packet_struct {
+ 	uint16_t len;
+ 	uint16_t index;
+ 	struct usb_packet_struct *next;
+ 	uint8_t buf[64];
++#ifdef USB_POOL
++    int iPool;
++#endif
+ } usb_packet_t;
+ 
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+ 
++#ifdef USB_POOL
++int usb_mem_init(void);
++#if MEM_DEBUG > 0
++usb_packet_t * usb_malloc(int iEP, int iLine);
++void usb_free(usb_packet_t *p, int iLine);
++#else
++usb_packet_t * usb_malloc(int iEP);
++void usb_free(usb_packet_t *p);
++#endif
++#else // USB_POOL not defined
+ usb_packet_t * usb_malloc(void);
+ void usb_free(usb_packet_t *p);
++#endif
++
++void UsbLog (const char *psFmt,...);
++#if MEM_DEBUG > 0
++const usb_packet_t * usb_mem_base(void);
++void usb_mem_show(void);
++void usb_queues(void);
++#endif
+ 
+ #ifdef __cplusplus
+ }
+diff -uNrb arduino.orig/hardware/teensy/avr/cores/teensy3/yield.cpp arduino/hardware/teensy/avr/cores/teensy3/yield.cpp
+--- arduino.orig/hardware/teensy/avr/cores/teensy3/yield.cpp	2020-06-04 11:23:22.430812700 +0100
++++ arduino/hardware/teensy/avr/cores/teensy3/yield.cpp	2020-06-04 11:27:59.563632700 +0100
+@@ -38,7 +38,9 @@
+ 
+ 	if (running) return; // TODO: does this need to be atomic?
+ 	running = 1;
++#if defined(USB_SERIAL) || defined(USB_DUAL_SERIAL) || defined(USB_TRIPLE_SERIAL)
+ 	if (Serial.available()) serialEvent();
++#endif
+ #if defined(USB_DUAL_SERIAL) || defined(USB_TRIPLE_SERIAL)
+ 	if (SerialUSB1.available()) serialEventUSB1();
+ #endif
